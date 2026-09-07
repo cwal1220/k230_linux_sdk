@@ -10,7 +10,7 @@ UBOOT_BUILD_DIR=${BUILD_DIR}/uboot-2022.10
 K230_SDK_ROOT=$(dirname $(dirname ${BASE_DIR}))
 GENIMAGE_CFG_SD=$(dirname $(realpath "$0"))/genimage.cfg
 
-BR2_ROOTFS_OVERLAY=$(cat ${BASE_DIR}/.config | grep BR2_ROOTFS_OVERLAY | cut -d= -f2  |  tr -d '"' )
+BR2_ROOTFS_OVERLAY=$(cat ${BASE_DIR}/.config | grep BR2_ROOTFS_OVERLAY | cut -d= -f2  |  tr -d '"' | awk '{print $1}' )
 
 BR_OVERLAY_DIR=${K230_SDK_ROOT}/buildroot-overlay
 

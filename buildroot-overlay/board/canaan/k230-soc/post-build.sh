@@ -102,6 +102,12 @@ EOF
 		echo "modprobe aic8800_fdrv.ko aicwf_dbg_level=1" >> ${auto_boot_f}
 	fi
 
+	# The 01Studio production image uses SSH for remote access.  Avoid
+	# exposing the unauthenticated telnet service on every boot.
+	if [ "${CONF}" = "k230_canmv_01studio_defconfig" ]; then
+		rm -f "${rootfs_dir}/etc/init.d/S50telnet"
+	fi
+
 
 	if [ ! -z "$BR2_CANAAN_AUTO_RUN_CMD" ] ; then
 		echo  "$BR2_CANAAN_AUTO_RUN_CMD" >> ${auto_boot_f}

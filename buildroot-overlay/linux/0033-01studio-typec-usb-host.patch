@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chan Park <chan.park@stradvision.com>
+Date: Thu, 6 Aug 2026 00:00:00 +0900
+Subject: [PATCH] dts: 01studio: configure Type-C USB0 as host
+
+The 01Studio CanMV K230 Type-C connector is wired to USB0.  Keep the
+controller enabled, but make its Linux role host so a USB peripheral such as
+Black Panda can be enumerated.  The Black Panda/vehicle harness supplies the
+external VBUS in this setup, so deliberately do not add a vbus-supply
+regulator.  USB1 (the USB-A connector) remains a host.
+
+Signed-off-by: Chan Park <chan.park@stradvision.com>
+---
+ .../boot/dts/canaan/k230-canmv-01studio-lcd.dts    | 1 +
+ .../boot/dts/canaan/k230-canmv-01studio.dts        | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/arch/riscv/boot/dts/canaan/k230-canmv-01studio-lcd.dts b/arch/riscv/boot/dts/canaan/k230-canmv-01studio-lcd.dts
+--- a/arch/riscv/boot/dts/canaan/k230-canmv-01studio-lcd.dts
++++ b/arch/riscv/boot/dts/canaan/k230-canmv-01studio-lcd.dts
+@@ -93,6 +93,7 @@
+ 	mshc_ctrl_r = <0x00>;
+ };
+ &usb0 {
++	dr_mode = "host";
+ 	status = "okay";
+ };
+ &usb1 {
+diff --git a/arch/riscv/boot/dts/canaan/k230-canmv-01studio.dts b/arch/riscv/boot/dts/canaan/k230-canmv-01studio.dts
+--- a/arch/riscv/boot/dts/canaan/k230-canmv-01studio.dts
++++ b/arch/riscv/boot/dts/canaan/k230-canmv-01studio.dts
+@@ -88,6 +88,7 @@
+ 	mshc_ctrl_r = <0x00>;
+ };
+ &usb0 {
++	dr_mode = "host";
+ 	status = "okay";
+ };
+ &usb1 {
+--
+2.39.0

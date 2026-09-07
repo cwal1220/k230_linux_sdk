@@ -112,11 +112,19 @@ char *board_fdt_chosen_bootargs(void){
     if(NULL == bootargs) {
         if((bootargs = fdt_chosen_bootargs())!=NULL)
             return bootargs;
-        if(g_bootmod == SYSCTL_BOOT_SDIO0)
+        if(g_bootmod == SYSCTL_BOOT_SDIO0) {
+#if defined(CONFIG_TARGET_K230_CANMV_01STUDIO)
+            bootargs = "root=/dev/mmcblk0p2 loglevel=4 rw rootwait rootfstype=ext4 console=ttyS0,115200";
+#else
             bootargs = "root=/dev/mmcblk0p2 loglevel=8 rw rootdelay=4 rootfstype=ext4 console=ttyS0,115200  earlycon=sbi";
-        else if(g_bootmod == SYSCTL_BOOT_SDIO1)
+#endif
+        } else if(g_bootmod == SYSCTL_BOOT_SDIO1) {
+#if defined(CONFIG_TARGET_K230_CANMV_01STUDIO)
+            bootargs = "root=/dev/mmcblk1p2 loglevel=4 rw rootwait rootfstype=ext4 console=ttyS0,115200";
+#else
             bootargs = "root=/dev/mmcblk1p2 loglevel=8 rw rootdelay=4 rootfstype=ext4 console=ttyS0,115200  earlycon=sbi";
-        else  if(g_bootmod == SYSCTL_BOOT_NORFLASH)
+#endif
+        } else if(g_bootmod == SYSCTL_BOOT_NORFLASH)
             //bootargs = "root=/dev/mtdblock9 rw rootwait rootfstype=jffs2 console=ttyS0,115200 earlycon=sbi";
             //bootargs = "ubi.mtd=9 rootfstype=ubifs rw root=ubi0_0 console=ttyS0,115200 earlycon=sbi";
             bootargs = "ubi.mtd=9 rootfstype=ubifs rw root=ubi0_0 console=ttyS0,115200 earlycon=sbi fw_devlink=off quiet";

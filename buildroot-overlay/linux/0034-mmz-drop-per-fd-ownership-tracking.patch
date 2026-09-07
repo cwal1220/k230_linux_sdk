@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chan Park <chan.park@stradvision.com>
+Date: Mon, 7 Sep 2026 00:00:00 +0900
+Subject: [PATCH] mmz: drop per-fd ownership tracking from DMA hardening
+
+The K230 media stack shares mmz allocations across processes by physical
+address (ISP, vvcam, KPU runtime, display). Freeing every allocation when
+the allocating fd closes and rejecting mmap of buffers another fd allocated
+pulls memory out from under live users, so any process exit (vo_init,
+camerad restart, stack stop) corrupts isp_media_server/modeld and the
+display. Revert only the mmz.c part of the DMA hardening; the GDMA/peridma
+address range checks stay.
+---
+diff --git a/drivers/misc/canaan/mmz/mmz.c b/drivers/misc/canaan/mmz/mmz.c
+old mode 100644
+new mode 100755
+--- a/drivers/misc/canaan/mmz/mmz.c
++++ b/drivers/misc/canaan/mmz/mmz.c
+@@ -32,96 +32,10 @@
+ #include <linux/uio.h>
+ #include <linux/uaccess.h>
+ #include <linux/security.h>
+-#include <linux/soc/canaan/k230-dma-addr.h>
+-
+-/*
+- * K230 physical memory layout:
+- *   0x00000000 - 0x3FFFFFFF : DDR (1GB)
+- *   0x80400000+             : Device registers (GNNE, AI2D, etc.)
+- *
+- * mmz mmap should only allow mapping within the DDR region.
+- * Mapping device registers or other MMIO regions from userspace
+- * is a security risk (allows direct hardware manipulation).
+- */
+-
+-
+-/* Track per-fd allocations to prevent cross-process free */
+-struct mmz_alloc_entry {
+-	struct list_head list;
+-	unsigned long phys;
+-	unsigned long length;
+-};
+-
+-struct mmz_fd_ctx {
+-	struct list_head allocs;
+-};
+ 
+ static struct device *mmz_dev;
+ static DEFINE_MUTEX(mmz_mutex);
+ 
+-static bool mmz_is_owned_alloc(struct mmz_fd_ctx *ctx,
+-			       phys_addr_t offset, size_t size)
+-{
+-	struct mmz_alloc_entry *entry;
+-
+-	list_for_each_entry(entry, &ctx->allocs, list) {
+-		if (offset >= entry->phys &&
+-		    offset + size <= entry->phys + entry->length)
+-			return true;
+-	}
+-	pr_warn("mmz: mmap phys=0x%lx size=0x%lx not in owned allocs, checking KPU range\n",
+-		offset, size);
+-
+-	/* Allow entire KPU range (0x80000000–0x807FFFFF).
+-	 * This includes both KPU shared memory (0x80000000–0x803FFFFF) and
+-	 * AI device registers (0x80400000–0x807FFFFF). The latter is intentionally
+-	 * allowed for legacy userspace compatibility. */
+-	if (offset >= K230_DDR_PHYS_END &&
+-	    offset + size <= K230_KPU_PHYS_END)
+-		return true;
+-
+-	return false;
+-}
+-
+-static int mmz_open(struct inode *inode, struct file *filp)
+-{
+-	struct mmz_fd_ctx *ctx;
+-
+-	if (!capable(CAP_SYS_RAWIO))
+-		return -EPERM;
+-
+-	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+-	if (!ctx)
+-		return -ENOMEM;
+-	INIT_LIST_HEAD(&ctx->allocs);
+-	filp->private_data = ctx;
+-
+-	return 0;
+-}
+-
+-static int mmz_release(struct inode *inode, struct file *filp)
+-{
+-	struct mmz_fd_ctx *ctx = filp->private_data;
+-	struct mmz_alloc_entry *entry, *tmp;
+-
+-	if (!ctx)
+-		return 0;
+-
+-	mutex_lock(&mmz_mutex);
+-	list_for_each_entry_safe(entry, tmp, &ctx->allocs, list) {
+-		dma_free_coherent(mmz_dev, entry->length,
+-				  phys_to_virt(entry->phys),
+-				  (dma_addr_t)entry->phys);
+-		list_del(&entry->list);
+-		kfree(entry);
+-	}
+-	mutex_unlock(&mmz_mutex);
+-	kfree(ctx);
+-	filp->private_data = NULL;
+-
+-	return 0;
+-}
+-
+ #define MMZ_ALLOC_MEM _IOWR('g', 1, unsigned long)
+ #define MMZ_FREE_MEM _IOWR('g', 2, unsigned long)
+ struct mmz_info {
+@@ -135,9 +49,6 @@ static long mmz_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ {
+ 	struct mmz_info t_mem_info;
+ 
+-	if (!capable(CAP_SYS_RAWIO))
+-		return -EPERM;
+-
+ 	switch (cmd) {
+ 	case MMZ_ALLOC_MEM:
+ 		if (copy_from_user(&t_mem_info, (void *)arg,
+@@ -147,23 +58,6 @@ static long mmz_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 			mmz_dev, t_mem_info.length,
+ 			(dma_addr_t *)(&(t_mem_info.mmz_phys)),
+ 			GFP_KERNEL | GFP_DMA);
+-		if (!t_mem_info.kernel_virt_addr)
+-			return -ENOMEM;
+-		{
+-			struct mmz_fd_ctx *ctx = filp->private_data;
+-			struct mmz_alloc_entry *entry;
+-
+-			entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+-			if (!entry) {
+-				dma_free_coherent(mmz_dev, t_mem_info.length,
+-						  t_mem_info.kernel_virt_addr,
+-						  (dma_addr_t)t_mem_info.mmz_phys);
+-				return -ENOMEM;
+-			}
+-			entry->phys = t_mem_info.mmz_phys;
+-			entry->length = t_mem_info.length;
+-			list_add(&entry->list, &ctx->allocs);
+-		}
+ 		if (copy_to_user((void *)arg, &t_mem_info, sizeof(struct mmz_info)))
+ 			return -EFAULT;
+ 		break;
+@@ -171,27 +65,6 @@ static long mmz_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 		if (copy_from_user(&t_mem_info, (void *)arg,
+ 				   sizeof(struct mmz_info)))
+ 			return -EFAULT;
+-		{
+-			struct mmz_fd_ctx *ctx = filp->private_data;
+-			struct mmz_alloc_entry *entry, *tmp;
+-			bool found = false;
+-
+-			list_for_each_entry_safe(entry, tmp, &ctx->allocs, list) {
+-				if (entry->phys == t_mem_info.mmz_phys &&
+-				    entry->length == t_mem_info.length) {
+-					found = true;
+-					list_del(&entry->list);
+-					kfree(entry);
+-					break;
+-				}
+-			}
+-			if (!found) {
+-				pr_err("%s: free untracked allocation phys=0x%lx len=0x%lx\n",
+-				       __func__, t_mem_info.mmz_phys,
+-				       t_mem_info.length);
+-				return -EINVAL;
+-			}
+-		}
+ 		dma_free_coherent(mmz_dev, t_mem_info.length,
+ 				  t_mem_info.kernel_virt_addr,
+ 				  t_mem_info.mmz_phys);
+@@ -343,15 +216,6 @@ static int mmz_map(struct file *file, struct vm_area_struct *vma)
+ 	size_t size = vma->vm_end - vma->vm_start;
+ 	phys_addr_t offset = (phys_addr_t)vma->vm_pgoff << PAGE_SHIFT;
+ 
+-	if (!capable(CAP_SYS_RAWIO))
+-		return -EPERM;
+-
+-	if (!mmz_is_owned_alloc(file->private_data, offset, size)) {
+-		pr_err("%s: mmap untracked region phys=0x%pa size=0x%zx\n",
+-		       __func__, &offset, size);
+-		return -EPERM;
+-	}
+-
+ 	/* Does it even fit in phys_addr_t? */
+ 	if (offset >> PAGE_SHIFT != vma->vm_pgoff)
+ 		return -EINVAL;
+@@ -392,10 +256,10 @@ static int mmz_map(struct file *file, struct vm_area_struct *vma)
+ 
+ static int mmap_mem(struct file *file, struct vm_area_struct *vma)
+ {
++	int ret = 0;
+-	int ret;
+ 
+ 	mutex_lock(&mmz_mutex);
++	mmz_map(file, vma);
+-	ret = mmz_map(file, vma);
+ 	mutex_unlock(&mmz_mutex);
+ 
+ 	return ret;
+@@ -403,8 +267,6 @@ static int mmap_mem(struct file *file, struct vm_area_struct *vma)
+ 
+ static const struct file_operations mmz_fops = {
+ 	.owner = THIS_MODULE,
+-	.open = mmz_open,
+-	.release = mmz_release,
+ 	.unlocked_ioctl = mmz_unlocked_ioctl,
+ 	.mmap = mmap_mem,
+ };

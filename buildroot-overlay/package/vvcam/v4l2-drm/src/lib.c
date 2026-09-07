@@ -344,6 +344,18 @@ static void dump_file(const struct v4l2_drm_context* ctx, unsigned channel) {
     pr("dump file to %s", filename);
 }
 
+/* zero-filled NV12 scans out green; prime the vsync-trigger commit with black */
+static void v4l2_drm_prime_black(struct v4l2_drm_context* ctx) {
+    struct display_buffer* b0 = ctx->display_buffers ? ctx->display_buffers[0] : NULL;
+    if (!b0 || !b0->map || ctx->video_format != V4L2_PIX_FMT_NV12)
+        return;
+    size_t luma = (size_t)b0->stride * b0->height;
+    if (luma > b0->size)
+        luma = b0->size;
+    memset(b0->map, 0x00, luma);
+    memset((unsigned char*)b0->map + luma, 0x80, b0->size - luma);
+}
+
 int v4l2_drm_run(struct v4l2_drm_context context[], unsigned num, v4l2_drm_handler handler) {
     int flag_enable_display = 0;
     int display_fd;
@@ -354,6 +366,7 @@ int v4l2_drm_run(struct v4l2_drm_context context[], unsigned num, v4l2_drm_handl
         if (context[i].display) {
             if (flag_enable_display == 0) {
                 // trig vsync
+                v4l2_drm_prime_black(&context[i]);
                 display_commit_buffer(context[i].display_buffers[0], context[i].offset_x, context[i].offset_y);
             }
             flag_enable_display = 1;
@@ -521,6 +534,7 @@ int v4l2_drm_run_v4l2_2_drm(struct v4l2_drm_context context[], unsigned num, v4l
             CKE(ioctl(context[i].video_fd, VIDIOC_STREAMON, &type), streamerr);
             if (flag_enable_display == 0) {
                 // trig vsync
+                v4l2_drm_prime_black(&context[i]);
                 display_commit_buffer(context[i].display_buffers[0], context[i].offset_x, context[i].offset_y);
                 flag_enable_display = 1;
                 d = context[i].plane->display;

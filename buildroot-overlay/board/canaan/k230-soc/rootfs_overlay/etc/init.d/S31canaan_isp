@@ -11,4 +11,3 @@ modprobe nonai2d
 ISP_MEDIA_SENSOR_DRIVER=/usr/lib/libvvcam.so /usr/bin/isp_media_server > /dev/null 2> /tmp/isp.err.log &
 
 
-vo_init &
